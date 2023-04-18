@@ -1,0 +1,2084 @@
+---
+title: "cfOC analysis
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+library(ggplot2)
+library(dplyr)
+library(gt)
+library(gtsummary)
+library(tidyverse)
+library(MetBrewer)
+library(patchwork)
+library(pROC)
+```
+
+```{r colours}
+cols <- MetBrewer::met.brewer("Isfahan1", n = 8)
+annonc <- c("#50153a","#57747d", "#cccbd4", "#ede5c9", "#671d1a")
+col_lanc <- ggsci::pal_lancet(palette = "lanonc")(8)
+```
+
+```{r scripts}
+source("0-data/src/plot_sens_spec.R")
+source("0-data/src/write_sens_spec.R")
+source("0-data/src/cutoff.R")
+```
+
+# Preprocessing
+
+Raw clipped sequencing reads are preprocessed using code in folder 1-preprocessing, leveraging Bismark.
+
+* Step 1 generates bismark.sh script (step 2)
+* Step 2 runs bismark script.
+* Step 3a-c: run extraction. Can be automated with script 4 (prepare paths beforehand for it to work).
+* Step 4 runs 4a-c.
+* Step 5 extracts the stats. The final preprocessed data file
+Once processed summary files are available, remaining analysis can begin.
+
+# Analysis, figures and tables
+
+## Participant characteristics (Table 1)
+
+Table 1 pulls participant characteristics from data file
+
+```{r table1}
+theme_gtsummary_journal(journal = "jama")
+theme_gtsummary_compact()
+
+# Load in data
+load("2-markdown/data.Rdata")
+data_filtered <- data %>%
+  filter(set != "Precision set") |> 
+  mutate(brca_status = case_when(brca_status == "Unknown" ~ "Unknown",
+                                 brca_status == "BRCA1" ~ "<i>BRCA1</i> mutation carrier",
+                                 brca_status == "BRCA2" ~ "<i>BRCA2</i> mutation carrier",
+                                 brca_status == "WT" ~ "Confirmed <i>BRCA1/2</i> wild type")) %>%
+  mutate(brca_status = factor(brca_status, levels = c("<i>BRCA1</i> mutation carrier",
+                                                      "<i>BRCA2</i> mutation carrier",
+                                                      "Confirmed <i>BRCA1/2</i> wild type",
+                                                      "Unknown"))) %>%
+  mutate(group = case_when(set == "Diagnostic set" ~ "Diagnostic set<br>(cfDNA tube study)",
+                           set == "Early detection set" ~ "Early detection set<br>(UKFOCSS)")) %>%
+  mutate(type2 = case_when(type %in% c("Control", "Benign control (ovarian)",
+                                       "Healthy volunteer") ~ "Control",
+                           type %in% c("Ovarian", "Ovarian cancer") ~ "Ovarian cancer")) %>%
+  mutate(type3 = case_when(type %in% c("Control", "Healthy volunteer") ~ "Healthy volunteer",
+                           type %in% c("Ovarian", "Ovarian cancer") ~ "Ovarian cancer",
+                           type == "Benign control (ovarian)" ~ "Benign pelvic pathology")) %>%
+  mutate(type3 = factor(type3, levels = c("Healthy volunteer",
+                                          "Benign pelvic pathology",
+                                          "Ovarian cancer"))) %>%
+  mutate(hist_control = ifelse(type == "Benign control (ovarian)", histology, 
+                               ifelse(type3 == "Healthy volunteer", "None (healthy volunteer)", NA))) %>%
+  mutate(hist_case = ifelse(type2 == "Ovarian cancer", histology, NA)) %>%
+  mutate(hist_case = factor(hist_case, levels = c("High-grade serous ovarian cancer",
+                                                  "Low-grade serous ovarian cancer",
+                                                  "Mucinous ovarian cancer",
+                                                  "Endometrioid ovarian cancer",
+                                                  "Borderline ovarian cancer",
+                                                  "Other/unknown"))) %>%
+  mutate(stage = ifelse(type3 == "Ovarian cancer" & is.na(stage), "Unknown",
+                           stage)) %>%
+  mutate(stage = case_when(stage == "1" ~ "I",
+                              stage == "2" ~ "II",
+                              stage == "3" ~ "III",
+                              stage == "4" ~ "IV",
+                              stage == "Unknown" ~ "Unknown")) %>%
+  mutate(stage = factor(stage, levels = c("I",
+                                                "II",
+                                                "III",
+                                                "IV",
+                                                "Unknown"))) %>%
+  mutate(grade = ifelse(type3 == "Ovarian cancer" & is.na(grade), "Unknown",
+                           grade)) %>%
+  mutate(risk = factor(risk, levels = c("Low/unknown", "High"))) %>%
+  mutate(censoring = ifelse(type3 == "Ovarian cancer", time_to_event,
+                            censoring)) %>%
+  mutate(ca125grp = case_when(ca125 >= 35 ~ "pos",
+                              ca125 < 35 ~ "neg",
+                              is.na(ca125) & ca125_local_datediff < 0 & ca125_local >= 35 ~ "pos",
+                              is.na(ca125) & ca125_local_datediff > 0 & ca125_local < 35 ~ "neg"))  %>%
+  mutate(available_ca125 = ifelse(!is.na(ca125grp), "Yes", "No")) %>%
+  mutate(available_ca125 = factor(available_ca125, levels = c("Yes",
+                                                              "No")))
+
+tbl <- data_filtered %>%
+  select(group, type2, type3, age_sample_taken, age_at_dx, censoring, hist_case, grade, risk,  stage, hist_control, available_ca125, ca125, brca_status) %>%
+  droplevels() %>%
+  tbl_strata(strata = group,
+             .tbl_fun= 
+               ~ .x %>%
+               tbl_summary(by = type2,
+                           type = list(age_sample_taken ~ "continuous"),
+                           missing = "no",
+                           label = list(type3 ~ "Detail", 
+                                        hist_case ~ "Histology (cases)",
+                                        hist_control ~ "Pathology (controls)",
+                                        age_sample_taken ~ "Age at sample taken",
+                                        age_at_dx ~ "Age at diagnosis",
+                                        censoring ~ "Time to event (days)*",
+                                        grade ~ "Grade (cases)",
+                                        stage ~ "Stage (cases)",
+                                        risk ~ md("Risk classification (cases) <sup>†</sup>"),
+                                        available_ca125 ~ "CA125 measurement available",
+                                        ca125 ~ md("CA125  (U/mL) <sup>§</sup>"),
+                                        brca_status ~ html("<i>BRCA</i> mutation status"))) %>%
+               bold_labels() %>%
+               modify_header(update = all_stat_cols() ~"**{level}**<br>n = {n}"))
+
+t1 <- tbl %>%
+  as_gt() %>%
+  text_transform(locations = cells_body(),
+                 fn = function(x){
+                   paste0(ifelse(x == "0 (0)", "", ifelse(x == "NA (NA – NA)", "", x)))
+                 }
+  ) %>%
+  text_transform(locations = cells_body(),
+                 fn = function(x){
+                   paste0(ifelse(x == "0 (NA)", "", x))
+                 }
+  ) %>%
+  text_transform(locations = cells_body(),
+                 fn = function(x){
+                   gsub("[.]", "·", x)
+                 }) %>%
+  tab_options(
+    table.width = px(700),
+    table.font.size = 14,
+    table.font.names = "Guardian Sans",
+  ) %>%
+  opt_row_striping() %>%
+  tab_source_note(html("* Time to event in controls: time to censoring (end of follow-up); in cases: time to diagnosis.<br>
+  <sup>†</sup> Grade 2 and 3 cancers were classified as high risk, all others as low risk.<br> <sup>§</sup> CA125 information available at the time of blood sampling for 24/34 controls and 29/34 ovarian cancer cases. For the remaining cases, it was available before or after blood sampling (see methods)."))
+
+t1
+# # table can be saved via:
+# # to html
+# t1 %>%
+#   gtsave("2-markdown/table1.html")
+# # to pdf
+# pagedown::chrome_print("~2-markdown/table1.html", output = "2-markdown/table1.pdf")
+```
+
+## Read statistics (Figure 2)
+
+### Mapping
+
+```{r mapping}
+# mapping - diagnostic
+mapping_diag <- data |> 
+  dplyr::filter(set == "Diagnostic set") |>
+  ggplot(aes(x = reorder(sampleid, -mapping),
+             y = mapping,
+             fill = set)) +
+  geom_col() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "top",
+        panel.background = element_blank()) +
+  xlab("") +
+  ylab("Mapping rate (%)") +
+  facet_wrap(~set,
+             nrow = 2) +
+  scale_fill_manual(values = annonc[2]) +
+  theme(text=element_text(family="Guardian Sans")) +
+  coord_cartesian(ylim = c(0,85))
+
+# mapping - early detection
+mapping_det <- data |> 
+  dplyr::filter(set != "Precision set") |>
+  ggplot(aes(x = reorder(sampleid, -mapping),
+             y = mapping,
+             fill = set)) +
+  geom_col() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "top",
+        panel.background = element_blank()) +
+  xlab("") +
+  ylab("Mapping rate (%)") +
+  facet_wrap(~set,
+             scales = "free_x",
+             nrow = 2) +
+  scale_fill_manual(values = annonc[c(2, 2)]) +
+  theme(text=element_text(family="Guardian Sans")) +
+  coord_cartesian(ylim = c(0,85))
+```
+
+### Distribution of reads
+
+```{r distribution}
+# Distribution of reads
+data2 <- data %>%
+  pivot_longer(cols = c("reads_EFC_144_genome", "reads_EFC_204_genome", "reads_EFC_228_genome"),
+               names_to = "region",
+               values_to = "read_region")
+
+data2 %>%
+  dplyr::filter(set != "Precision set") |>
+  ggplot(aes(x = as.character(sampleid),
+             y = read_region,
+             fill = region,
+             text = paste0("id = ", as.character(sampleid), "\n",
+                           "reads = ", read_region))) +
+  geom_bar(position = "fill",
+           stat = "identity") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "top",
+        panel.background = element_blank()) +
+  xlab("") +
+  ylab("% of all aligned reads") +
+  scale_fill_manual(values = cols[c(1, 3, 5)],
+                    name = "",
+                    labels = c("EFC 144", 
+                               "EFC 204",
+                               "EFC 228"))  +
+  facet_wrap(~set, scales = "free_x",
+             nrow = 3) +
+  theme(text=element_text(family="Guardian Sans"))
+```
+
+## Threshold selection and diagnostic validation (Figure 3)
+
+### Fully methylated values
+
+```{r fullymethylated}
+load("2-markdown/data.Rdata")
+
+data <- data %>%
+  dplyr::filter(set == "Diagnostic set") |> 
+  mutate(type2 = case_when(type == "Healthy volunteer" ~ "Healthy volunteer",
+                           type == "Benign control (ovarian)" ~ "Benign pelvic pathology",
+                           type == "Ovarian cancer" ~ "Ovarian cancer")) %>%
+  mutate(type2 = factor(type2, levels = c("Healthy volunteer",
+                                          "Benign pelvic pathology",
+                                          "Ovarian cancer"))) %>%
+  mutate(type3 = case_when(type %in% c("Healthy volunteer",
+                                       "Benign control (ovarian)") ~ "Control",
+                           type == "Ovarian cancer" ~ "Cancer")) %>%
+  mutate(type3 = factor(type3, levels = c("Control", "Cancer")))
+
+# Fully methylate values
+data2 <- data %>%
+  pivot_longer(c("fully_methylated_EFC_144_genome",
+                 "fully_methylated_EFC_204_genome",
+                 "fully_methylated_EFC_228_genome"),
+               names_to = "region",
+               values_to = "perc")
+
+labs <- c("EFC 144",
+          "EFC 204",
+          "EFC 228")
+names(labs) <- unique(data2$region)
+
+data2 %>%
+  ggplot(aes(x = type2,
+             y = perc,
+             colour = type2)) +
+  # geom_jitter() +
+  gghalves::geom_half_violin() +
+  gghalves::geom_half_boxplot(width = 0.1) +
+  gghalves::geom_half_point_panel(size = 0.6) +
+  facet_wrap(~region,
+             nrow = 1,
+             labeller = labeller(region = labs)) +
+  xlab("") + 
+  ylab("fully methylated reads (%)") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid = element_blank(),
+        legend.key = element_blank(),
+        legend.position = "top",
+        aspect.ratio = 0.8,
+        panel.spacing = unit(1.5, "lines"),
+        text = element_text(family="Guardian Sans")) +
+  scale_colour_manual(values = col_lanc[c(3,1,2)],
+                      name = "") +
+  guides(col = guide_legend(override.aes = list(linetype = c(0, 0, 0),
+                                                size = 2)))
+
+# save with ggsave, etc.
+```
+
+### ROCs for each value
+
+```{r rocs}
+rocs <- function(type, region, name = NULL, col = NULL,
+                 thr = 0.97, colour = "black"){
+  tmp <- pROC::roc(type, region, direction = "<")
+  tmpci <- pROC::ci.se(tmp, specificities = seq(0, 1, .1))
+  ci <- data.frame(x = as.numeric(rownames(tmpci)),
+                   lower = tmpci[,1],
+                   upper = tmpci[,3])
+  
+  if(!is.null(name)){
+    min <- which.min(abs(coords(tmp)$specificity-thr))
+    coords <- coords(tmp)[min,]
+  }
+  
+  p1 <- pROC::ggroc(tmp) +
+    theme_minimal() +
+    geom_abline(slope=1, intercept = 1, linetype = "dashed", alpha=0.7, color = "grey") +
+    coord_equal() +
+    geom_ribbon(
+      data = ci,
+      aes(x = x, ymin = lower, ymax = upper),
+      fill = 1,
+      alpha = 0.05,
+      inherit.aes = F) +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          text=element_text(family="Guardian Sans")) +
+    xlab("Specificity") +
+    ylab("Sensitivity")
+  
+  if(!is.null(name)){
+    p1 <- p1 +
+      geom_point(
+        data = coords,
+        aes(x = specificity,
+            y = sensitivity),
+        shape = 15,
+        size = 3,
+        colour = colour
+      ) +
+      annotate("text",
+               label = paste0(name, "\nthreshold"),
+               x = 0.7,
+               y = coords$sensitivity - 0.25*coords$sensitivity,
+               size = 3,
+               colour = colour,
+               fontface = 2) +
+      theme(text=element_text(family="Guardian Sans"))
+  }
+  
+  return(p1)
+}
+
+efc_144 <- rocs(data$type3, data$fully_methylated_EFC_144_genome,
+                name = "EFC 144",
+                colour = cols[2])
+
+efc_204 <- rocs(data$type3, data$fully_methylated_EFC_204_genome,
+                name = "EFC 204",
+                colour = cols[3])+
+  xlab("") +
+  ylab("")
+
+efc_228 <- rocs(data$type3, data$fully_methylated_EFC_228_genome,
+                name = "EFC 228",
+                colour = cols[6])+
+  xlab("") +
+  ylab("")
+
+library(patchwork)
+(efc_144 | efc_204 | efc_228)
+
+# save with ggsave, etc.
+```
+
+### Thresholds
+
+```{r get.thresholds}
+# get thresholds separately
+get_thresholds <- function(type, region, thr = 0.97){
+  tmp <- roc(type, region, direction = "<")
+  min <- which.min(abs(coords(tmp)$specificity-thr))
+  coords <- coords(tmp)[min,]
+  return(coords$threshold)
+}
+
+efc_144_threshold <- get_thresholds(data$type3, data$fully_methylated_EFC_144_genome)
+efc_204_threshold <- get_thresholds(data$type3, data$fully_methylated_EFC_204_genome)
+efc_228_threshold <- get_thresholds(data$type3, data$fully_methylated_EFC_228_genome)
+
+# these thresholds are saved and used in the cutoff function
+```
+
+### Cutoff: sensitivity and specificity; All ovarian cancers
+
+```{r cutoff.all}
+# read cutoff function
+source("0-data/src/cutoff.R")
+data_cutoff <- cutoff(data)
+## All OCs
+source("0-data/src/write_sens_spec.R")
+theme_gtsummary_journal(journal = "jama")
+theme_gtsummary_compact()
+allocs <- write_sens_spec(data_cutoff$type3, data_cutoff$cf_ovarian_score,
+                          label = "OC")
+allocs$table
+
+# # save
+# allocs$table %>%
+#   gtsave("2-markdown/allocs-diag.html")
+# pagedown::chrome_print("2-markdown/allocs-diag.html",
+#                        output = "2-markdown/allocs-diag.pdf")
+```
+
+### Cutoff: sensitivity and specificity; High-risk ovarian cancers
+
+```{r}
+## High OCs
+data_cutoff_hr <- data_cutoff %>%
+  filter((type3 == "Control") | (type3=="Cancer" & risk == "High"))
+
+data_cutoff2 <- data_cutoff_hr %>%
+  mutate(type = factor(type3, levels = c("Cancer", "Control")),
+         score = factor(cf_ovarian_score, levels = c("pos", "neg")))
+
+hrocs <- write_sens_spec(data_cutoff_hr$type3, data_cutoff_hr$cf_ovarian_score, label = "hrOC")
+hrocs$table
+
+# # save
+# hrocs$table %>%
+#   gtsave("2-markdown/hrocs-diag.html")
+# pagedown::chrome_print("2-markdown/hrocs-diag.html",
+#                        output = "2-markdown/hrocs-diag.pdf")
+```
+
+## Association with CA125 levels (Figure 4)
+
+### ROC: all ovarian cancers
+
+```{r rocplot.all.diag}
+load("2-markdown/data.Rdata")
+
+data <- data %>%
+  dplyr::filter(set == "Diagnostic set" & !is.na(ca125)) %>%
+  mutate(type2 = case_when(type == "Healthy volunteer" ~ "Healthy volunteer",
+                           type == "Benign control (ovarian)" ~ "Benign pelvic pathology",
+                           type == "Ovarian cancer" ~ "Ovarian cancer")) %>%
+  mutate(type2 = factor(type2, levels = c("Healthy volunteer",
+                                          "Benign pelvic pathology",
+                                          "Ovarian cancer"))) %>%
+  mutate(type3 = case_when(type %in% c("Healthy volunteer",
+                                       "Benign control (ovarian)") ~ "Control",
+                           type == "Ovarian cancer" ~ "Cancer")) %>%
+  mutate(type3 = factor(type3, levels = c("Control", "Cancer"))) %>%
+  mutate(ca125grp = case_when(ca125 >= 35 ~ "pos",
+                              ca125 < 35 ~ "neg")) %>%
+  droplevels() %>%
+  cutoff() %>%
+  mutate(score1 = ifelse(ca125grp == "pos" & cf_ovarian_score == "pos", "pos", "neg"),
+         score2 = ifelse((ca125grp == "pos" | cf_ovarian_score == "pos"), "pos", "neg"))
+
+tab <- table(data$type3, data$ca125grp)
+ca125 <- summary(epi.tests(tab))
+tab <- table(data$type3, data$cf_ovarian_score)
+cfdname <- summary(epi.tests(tab))
+
+scorelist <- list("cfDNAme score" = data$cf_ovarian_score,
+                  "CA125" = data$ca125grp,
+                  "combined" = data$score2)
+
+allocs <- plot_sens_spec(data$type3, 
+                         scorelist,
+                         "All ovarian cancers")
+```
+
+### Cutoff: all ovarian cancers (CA125-)
+
+```{r cutoff.all.ca125neg.diag}
+# CA125neg cfDNAmeneg:
+neg <- data |> 
+  dplyr::filter(ca125grp == "neg") |>
+  filter(cf_ovarian_score == "neg" & type3 == "Cancer")
+tab0 <- write_sens_spec(dat_ca125neg$type3, dat_ca125neg$cf_ovarian_score,
+                        label = "OC") # CA125 neg cancers.
+```
+
+### Cutoff: all ovarian cancers (CA125+)
+
+```{r cutoff.all.ca125pos.diag}
+dat_ca125pos <- data %>%
+  filter(ca125grp == "pos")
+tab2 <- write_sens_spec(dat_ca125pos$type3, dat_ca125pos$cf_ovarian_score,
+                        label = "OC") # CA125 pos cancers.
+tab2$table
+```
+
+### ROC: high-risk
+
+```{r roc.high.diag}
+hr <- data %>%
+  filter((type3 == "Control") | (type3=="Cancer" & risk == "High"))
+
+scorelist <- list("cfDNAme score" = hr$cf_ovarian_score,
+                  "CA125" = hr$ca125grp,
+                  "combined" = hr$score2)
+hrocs <- plot_sens_spec(hr$type3, 
+                         scorelist,
+                         "High-risk cancers")
+```
+
+### Cutoff: high-risk ovarian cancers (CA125-)
+
+```{r cutoff.hr.ca125neg.diag}
+dat_ca125neg <- hr %>%
+  filter(ca125grp == "neg")
+tab1 <- write_sens_spec(dat_ca125neg$type3, dat_ca125neg$cf_ovarian_score,label = "OC") # CA125 neg cancers.
+
+
+tab1$table 
+```
+
+### Cutoff: high-risk ovarian cancers (CA125+)
+
+```{r cutoff.hr.ca125pos.diag}
+dat_ca125pos <- hr %>%
+  filter(ca125grp == "pos")
+tab2 <- write_sens_spec(dat_ca125pos$type3, dat_ca125pos$cf_ovarian_score,
+                        label = "OC") # CA125 pos cancers.
+tab2$table
+```
+
+## Sensitivity/specificity in early detection set (Figure 5)
+
+### Subset and define gDNA cutoff
+
+```{r gdna}
+load("2-markdown/data.Rdata")
+
+data <- data %>%
+  filter(set == "Early detection set") %>%
+  droplevels() 
+data_cutoff <- cutoff(data)
+
+# Define gDNA cutoff
+gdna <- median(data_cutoff$gDNA_cont_ratio)
+```
+
+### Specificity 
+
+```{r spec.earlydet}
+# Sanity check
+allocs <- write_sens_spec(data_cutoff$type, data_cutoff$cf_ovarian_score)
+
+data_cutoff <- data_cutoff %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control")))
+tmp <- data.frame(matrix(nrow = 3,
+                           ncol = 4))
+colnames(tmp) <- c("type", "spec", "lower", "upper")
+  n.canc <- sum(data_cutoff$type=="Ovarian")
+n.cont <- sum(data_cutoff$type=="Control")
+n.low.canc <- sum(data_cutoff$gDNA_cont_ratio>gdna & data_cutoff$type=="Ovarian")
+n.low.cont <- sum(data_cutoff$gDNA_cont_ratio>gdna & data_cutoff$type=="Control")
+n.hi.canc <- sum(data_cutoff$gDNA_cont_ratio <= gdna & data_cutoff$type=="Ovarian")
+n.hi.cont <- sum(data_cutoff$gDNA_cont_ratio <= gdna & data_cutoff$type=="Control")
+  
+tmp$type <- c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+              paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+              paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")
+                )
+  
+tmp$type <- factor(tmp$type, levels = c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+                   paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+                   paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")))
+
+# all
+tab <- table(data_cutoff$cf_ovarian_score, data_cutoff$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[1] <- rval[4,2]
+tmp$lower[1] <- rval[4,3]
+tmp$upper[1] <- rval[4,4]
+  
+# lower cont
+tab <- table(data_cutoff[data_cutoff$gDNA_cont_ratio > gdna,]$cf_ovarian_score, data_cutoff[data_cutoff$gDNA_cont_ratio > gdna,]$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[2] <- rval[4,2]
+tmp$lower[2] <- rval[4,3]
+tmp$upper[2] <- rval[4,4]
+  
+# higher cont
+tab <- table(data_cutoff[data_cutoff$gDNA_cont_ratio < gdna,]$cf_ovarian_score, data_cutoff[data_cutoff$gDNA_cont_ratio < gdna,]$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[3] <- rval[4,2]
+tmp$lower[3] <- rval[4,3]
+tmp$upper[3] <- rval[4,4]
+  
+specificity <- tmp %>%
+  mutate(group = "Specificity\n") %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                width = 0.1,
+                colour = "gray") +
+  geom_point(aes(y = spec),
+             shape = 15,
+             size = 2
+             ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(spec*100, 1), nsmall = 1)), "%"),
+                x = type,
+                y = lower - 0.1),
+            size = 3,
+            family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans")) +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group)
+```
+
+### Sensitivity (all)
+
+```{r sens.earlydet.all}
+data_cutoff <- data_cutoff %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control")))
+sens_tab <- function(type, score, gDNA, gDNA_cutoff){
+  tmp <- data.frame(matrix(nrow = 3,
+                           ncol = 4))
+  colnames(tmp) <- c("type", "sens", "lower", "upper")
+  
+  n.canc <- sum(type=="Ovarian")
+  n.cont <- sum(type=="Control")
+  n.low.canc <- sum(gDNA>gDNA_cutoff & type=="Ovarian")
+  n.low.cont <- sum(gDNA>gDNA_cutoff & type=="Control")
+  n.hi.canc <- sum(gDNA <= gDNA_cutoff & type=="Ovarian")
+  n.hi.cont <- sum(gDNA <= gDNA_cutoff & type=="Control")
+  
+  tmp$type <- c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+                paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+                paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")
+  )
+  
+  tmp$type <- factor(tmp$type, levels = c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+                                          paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+                                          paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")
+  )
+  )  
+    # all
+  tab <- table(score, type)
+  rval <- summary(epi.tests(tab))
+  tmp$sens[1] <- rval[3,2]
+  tmp$lower[1] <- rval[3,3]
+  tmp$upper[1] <- rval[3,4]
+  
+  # lower cont
+  tab <- table(score[gDNA > gDNA_cutoff], type[gDNA > gDNA_cutoff])
+  rval <- summary(epi.tests(tab))
+  tmp$sens[2] <- rval[3,2]
+  tmp$lower[2] <- rval[3,3]
+  tmp$upper[2] <- rval[3,4]
+  
+  # higher cont
+  tab <- table(score[gDNA < gDNA_cutoff], type[gDNA < gDNA_cutoff])
+  rval <- summary(epi.tests(tab))
+  tmp$sens[3] <- rval[3,2]
+  tmp$lower[3] <- rval[3,3]
+  tmp$upper[3] <- rval[3,4]
+  
+  tmp <- as.data.frame(tmp)
+}
+
+all <- sens_tab(data_cutoff$type, data_cutoff$cf_ovarian_score, data_cutoff$gDNA_cont_ratio, gdna)
+all$group <- "Sensitivity (all cancers)\n"
+
+all  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                x = type,
+                y = upper + 0.1),
+            size = 3,
+            family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+```
+
+### Sensitivity (high-risk cancers)
+
+```{r sens.hr.earlydet}
+data_cutoff_hr <- data_cutoff %>%
+  filter((type == "Control") | (type=="Ovarian" & risk == "High"))
+
+# table(data_cutoff_hr$type, data_cutoff_hr$histology)
+hr <- sens_tab(data_cutoff_hr$type, data_cutoff_hr$cf_ovarian_score, data_cutoff_hr$gDNA_cont_ratio, gdna)
+hr$group <- "Sensitivity (high-risk cancers)\n"
+
+hr  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                x = type,
+                y = upper + 0.1),
+            size = 3,
+            family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+```
+
+
+### Sensitivity: time to diagnosis <1 year (high-risk)
+
+```{r sens.ttd1y.hr.earlydet}
+data_cutoff_hr_1y <- data_cutoff_hr %>%
+  filter(type == "Control" | time_to_event <= 365)
+# table(data_cutoff_hr$type, data_cutoff_hr$histology)
+
+hr_1y <- sens_tab(data_cutoff_hr_1y$type, data_cutoff_hr_1y$cf_ovarian_score, data_cutoff_hr_1y$gDNA_cont_ratio, gdna)
+hr_1y$group <- "Sensitivity (high-risk cancers)\n<1 y to diagnosis"
+
+hr_1y  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                x = type,
+                y = upper + 0.1),
+            size = 3,
+            family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+```
+
+### ROC and table: CA125 and cutoffs (all cancers)
+
+```{r ca125.earlydet}
+data <- data %>%
+  filter(gDNA_cont_ratio>=gdna) %>%
+  dplyr::filter(set == "Early detection set") |> 
+  mutate(type3 = case_when(type == "Control" ~ "Control",
+                           type == "Ovarian" ~ "Cancer")) %>%
+  mutate(type3 = factor(type3, levels = c("Control", "Cancer"))) %>%
+  mutate(ca125grp = case_when(ca125 >= 35 ~ "pos",
+                              ca125 < 35 ~ "neg",
+                              is.na(ca125) & ca125_local_datediff < 0 & ca125_local >= 35 ~ "pos",
+                              is.na(ca125) & ca125_local_datediff>0 & ca125_local < 35 ~ "neg")) %>%
+  filter(!is.na(ca125grp)) %>%
+  droplevels() %>%
+  cutoff() %>%
+  mutate(score1 = ifelse(ca125grp == "pos" & cf_ovarian_score == "pos", "pos", "neg"),
+         score2 = ifelse(ca125grp == "pos" | cf_ovarian_score == "pos", "pos", "neg"))
+
+scorelist <- list("cfDNAme score" = data$cf_ovarian_score,
+                  "CA125" = data$ca125grp,
+                  "combined" = data$score2)
+allocs <- plot_sens_spec(data$type3, 
+                         scorelist,
+                         "All ovarian cancers")
+
+dat_ca125neg <- data %>%
+  filter(ca125grp == "neg")
+
+tab0 <- write_sens_spec(dat_ca125neg$type3, dat_ca125neg$cf_ovarian_score,
+                        label = "OC") # CA125 neg cancers.
+tab0$table
+```
+
+```{r ca125.earlydet.all}
+hr <- data %>%
+  filter((type3 == "Control") | (type3=="Cancer" & risk == "High"))
+scorelist <- list("cfDNAme score" = hr$cf_ovarian_score,
+                  "CA125" = hr$ca125grp,
+                  "combined" = hr$score2)
+hrocs <- plot_sens_spec(hr$type3, 
+                        scorelist,
+                        "High-risk cancers")
+
+dat_ca125neg <- hr %>%
+  filter(ca125grp == "neg")
+tab1 <- write_sens_spec(dat_ca125neg$type3, dat_ca125neg$cf_ovarian_score,label = "OC") # CA125 neg cancers.
+tab1$table 
+```
+
+
+## cfOC status by BRCA mutation (Supplementary Figure 4)
+
+### Specificity
+
+```{r brcastatus.spec}
+load("2-markdown/data.Rdata")
+
+data <- data %>%
+  filter(set == "Early detection set") %>%
+  droplevels() 
+dat <- cutoff(data)
+
+# Define gDNA cutoff
+gdna <- median(dat$gDNA_cont_ratio)
+
+data_cutoff <- dat %>%
+  filter(brca_status == "WT") %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control")))
+
+tmp <- data.frame(matrix(nrow = 3,
+                         ncol = 4))
+colnames(tmp) <- c("type", "spec", "lower", "upper")
+n.canc <- sum(data_cutoff$type=="Ovarian")
+n.cont <- sum(data_cutoff$type=="Control")
+n.low.canc <- sum(data_cutoff$gDNA_cont_ratio>gdna & data_cutoff$type=="Ovarian")
+n.low.cont <- sum(data_cutoff$gDNA_cont_ratio>gdna & data_cutoff$type=="Control")
+n.hi.canc <- sum(data_cutoff$gDNA_cont_ratio <= gdna & data_cutoff$type=="Ovarian")
+n.hi.cont <- sum(data_cutoff$gDNA_cont_ratio <= gdna & data_cutoff$type=="Control")
+
+tmp$type <- c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+              paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+              paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")
+)
+
+tmp$type <- factor(tmp$type, levels = c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+                                        paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+                                        paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")))
+
+# all
+tab <- table(data_cutoff$cf_ovarian_score, data_cutoff$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[1] <- rval[4,2]
+tmp$lower[1] <- rval[4,3]
+tmp$upper[1] <- rval[4,4]
+
+# lower cont
+tab <- table(data_cutoff[data_cutoff$gDNA_cont_ratio > gdna,]$cf_ovarian_score, data_cutoff[data_cutoff$gDNA_cont_ratio > gdna,]$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[2] <- rval[4,2]
+tmp$lower[2] <- rval[4,3]
+tmp$upper[2] <- rval[4,4]
+
+# higher cont
+tab <- table(data_cutoff[data_cutoff$gDNA_cont_ratio < gdna,]$cf_ovarian_score, data_cutoff[data_cutoff$gDNA_cont_ratio < gdna,]$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[3] <- rval[4,2]
+tmp$lower[3] <- rval[4,3]
+tmp$upper[3] <- rval[4,4]
+
+# Spec-WT
+specificity_wt <- tmp %>%
+  mutate(group = "Specificity\n\nBRCA1/2 wild type") %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                width = 0.1,
+                colour = "gray") +
+  geom_point(aes(y = spec),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(spec*100, 1), nsmall = 1)), "%"),
+                 x = type,
+                 y = lower - 0.1),
+             size = 3,
+             family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans")) +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group)
+
+
+
+# Spec - BRCAmut
+data_cutoff <- dat %>%
+  filter(brca_status != "WT") %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control")))
+
+tmp <- data.frame(matrix(nrow = 3,
+                         ncol = 4))
+colnames(tmp) <- c("type", "spec", "lower", "upper")
+
+n.canc <- sum(data_cutoff$type=="Ovarian")
+n.cont <- sum(data_cutoff$type=="Control")
+n.low.canc <- sum(data_cutoff$gDNA_cont_ratio>gdna & data_cutoff$type=="Ovarian")
+n.low.cont <- sum(data_cutoff$gDNA_cont_ratio>gdna & data_cutoff$type=="Control")
+n.hi.canc <- sum(data_cutoff$gDNA_cont_ratio <= gdna & data_cutoff$type=="Ovarian")
+n.hi.cont <- sum(data_cutoff$gDNA_cont_ratio <= gdna & data_cutoff$type=="Control")
+
+tmp$type <- c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+              paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+              paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")
+)
+
+tmp$type <- factor(tmp$type, levels = c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+                                        paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+                                        paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")))
+
+# all
+tab <- table(data_cutoff$cf_ovarian_score, data_cutoff$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[1] <- rval[4,2]
+tmp$lower[1] <- rval[4,3]
+tmp$upper[1] <- rval[4,4]
+
+# lower cont
+tab <- table(data_cutoff[data_cutoff$gDNA_cont_ratio > gdna,]$cf_ovarian_score, data_cutoff[data_cutoff$gDNA_cont_ratio > gdna,]$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[2] <- rval[4,2]
+tmp$lower[2] <- rval[4,3]
+tmp$upper[2] <- rval[4,4]
+
+# higher cont
+tab <- table(data_cutoff[data_cutoff$gDNA_cont_ratio < gdna,]$cf_ovarian_score, data_cutoff[data_cutoff$gDNA_cont_ratio < gdna,]$type)
+rval <- summary(epi.tests(tab))
+tmp$spec[3] <- rval[4,2]
+tmp$lower[3] <- rval[4,3]
+tmp$upper[3] <- rval[4,4]
+
+specificity_brca <- tmp %>%
+  mutate(group = "Specificity\n\nBRCA1/2 alteration carriers") %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                width = 0.1,
+                colour = "gray") +
+  geom_point(aes(y = spec),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(spec*100, 1), nsmall = 1)), "%"),
+                 x = type,
+                 y = lower - 0.1),
+             size = 3,
+             family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans")) +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group)
+
+specificity_wt + specificity_brca
+```
+
+### Sensitivity
+
+```{r brcastatus.sens}
+sens_tab <- function(type, score, gDNA, gDNA_cutoff){
+  tmp <- data.frame(matrix(nrow = 3,
+                           ncol = 4))
+  colnames(tmp) <- c("type", "sens", "lower", "upper")
+  
+  n.canc <- sum(type=="Ovarian")
+  n.cont <- sum(type=="Control")
+  n.low.canc <- sum(gDNA>gDNA_cutoff & type=="Ovarian")
+  n.low.cont <- sum(gDNA>gDNA_cutoff & type=="Control")
+  n.hi.canc <- sum(gDNA <= gDNA_cutoff & type=="Ovarian")
+  n.hi.cont <- sum(gDNA <= gDNA_cutoff & type=="Control")
+  
+  tmp$type <- c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+                paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+                paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")
+  )
+  
+  tmp$type <- factor(tmp$type, levels = c(paste0("all\n(CO=", n.cont, ", OC=", n.canc, ")"),
+                                          paste0("lower gDNA\ncontamination\n(CO=", n.low.cont, ", OC=", n.low.canc, ")"),
+                                          paste0("higher gDNA\ncontamination\n(CO=", n.hi.cont, ", OC=", n.hi.canc, ")")
+  )
+  )  
+  # all
+  tab <- table(score, type)
+  rval <- summary(epi.tests(tab))
+  tmp$sens[1] <- rval[3,2]
+  tmp$lower[1] <- rval[3,3]
+  tmp$upper[1] <- rval[3,4]
+  
+  # lower cont
+  tab <- table(score[gDNA > gDNA_cutoff], type[gDNA > gDNA_cutoff])
+  rval <- summary(epi.tests(tab))
+  tmp$sens[2] <- rval[3,2]
+  tmp$lower[2] <- rval[3,3]
+  tmp$upper[2] <- rval[3,4]
+  
+  # higher cont
+  tab <- table(score[gDNA < gDNA_cutoff], type[gDNA < gDNA_cutoff])
+  rval <- summary(epi.tests(tab))
+  tmp$sens[3] <- rval[3,2]
+  tmp$lower[3] <- rval[3,3]
+  tmp$upper[3] <- rval[3,4]
+  
+  tmp <- as.data.frame(tmp)
+}
+
+# 6.1. All - BRCA WT -------------
+data_cutoff <- dat %>%
+  filter(brca_status == "WT") %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control")))
+
+all <- sens_tab(data_cutoff$type, data_cutoff$cf_ovarian_score, data_cutoff$gDNA_cont_ratio, gdna)
+all$group <- "Sensitivity (all cancers)\n\nBRCA1/2 wild type"
+
+all_cancers_wt <- all  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                 x = type,
+                 y = upper + 0.1),
+             size = 3,
+             family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+
+
+# 6.2. All - BRCA mut -------------
+data_cutoff <- dat %>%
+  filter(brca_status != "WT") %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control")))
+
+all <- sens_tab(data_cutoff$type, data_cutoff$cf_ovarian_score, data_cutoff$gDNA_cont_ratio, gdna)
+all$group <- "Sensitivity (all cancers)\n\nBRCA1/2 alteration carriers"
+
+all_cancers_brca <- all  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                 x = type,
+                 y = upper + 0.1),
+             size = 3,
+             family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+
+all_cancers_wt | all_cancers_brca
+```
+
+### Sensitivity: high risk
+
+```{r}
+# hr - BRCA wt ------------
+
+data_cutoff_hr <- dat %>%
+  filter(brca_status == "WT") %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control"))) %>%
+  filter((type == "Control") | (type=="Ovarian" & risk == "High"))
+# table(data_cutoff_hr$type, data_cutoff_hr$histology)
+
+hr <- sens_tab(data_cutoff_hr$type, data_cutoff_hr$cf_ovarian_score, data_cutoff_hr$gDNA_cont_ratio, gdna)
+hr$group <- "Sensitivity (high-risk cancers)\n\nBRCA1/2 wild type"
+
+high_risk_wt <- hr  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                 x = type,
+                 y = upper + 0.1),
+             size = 3,
+             family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+
+# hr - BRCA mut ------------
+data_cutoff_hr <- dat %>%
+  filter(brca_status != "WT") %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control"))) %>%
+  filter((type == "Control") | (type=="Ovarian" & risk == "High"))
+# table(data_cutoff_hr$type, data_cutoff_hr$cf_ovarian_score)
+
+hr <- sens_tab(data_cutoff_hr$type, data_cutoff_hr$cf_ovarian_score, data_cutoff_hr$gDNA_cont_ratio, gdna)
+hr$group <- "Sensitivity (high-risk cancers)\n\nBRCA1/2 alteration carriers"
+
+
+high_risk_brca <- hr  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                 x = type,
+                 y = upper + 0.1),
+             size = 3,
+             family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+
+high_risk_wt | high_risk_brca
+```
+
+### Sensitivity: high risk, less than 1 y to diagnosis
+
+```{r brcastatus.hr.ttd1y}
+data_cutoff_hr_1y <- dat %>%
+  filter(brca_status == "WT") %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control"))) %>%
+  filter((type == "Control") | (type=="Ovarian" & risk == "High")) %>%
+  filter(type == "Control" | time_to_event <= 365)
+# table(data_cutoff_hr$type, data_cutoff_hr$histology)
+
+hr_1y <- sens_tab(data_cutoff_hr_1y$type, data_cutoff_hr_1y$cf_ovarian_score, data_cutoff_hr_1y$gDNA_cont_ratio, gdna)
+hr_1y$group <- "Sensitivity (high-risk cancers)\n<1 y to diagnosis\nBRCA1/2 wild type"
+
+high_risk_1y_wt <- hr_1y  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                 x = type,
+                 y = upper),
+             size = 3,
+             family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+
+# BRCA ------------
+data_cutoff_hr_1y <- dat%>%
+  filter(brca_status != "WT") %>%
+  mutate(cf_ovarian_score = factor(cf_ovarian_score, levels = c("pos", "neg"))) %>%
+  mutate(type = factor(type, levels = c("Ovarian", "Control"))) %>%
+  filter((type == "Control") | (type=="Ovarian" & risk == "High")) %>%
+  filter(type == "Control" | time_to_event <= 365)
+## table(data_cutoff_hr$type, data_cutoff_hr$histology)
+
+hr_1y <- sens_tab(data_cutoff_hr_1y$type, data_cutoff_hr_1y$cf_ovarian_score, data_cutoff_hr_1y$gDNA_cont_ratio, gdna)
+hr_1y$group <- "Sensitivity (high-risk cancers)\n<1 y to diagnosis\nBRCA1/2 alteration carriers"
+
+high_risk_1y_brca <- hr_1y  %>%
+  ggplot(aes(x = type)) +
+  geom_errorbar(aes(ymin = lower,
+                    ymax = upper),
+                colour = "gray",
+                width = 0.1) +
+  geom_point(aes(y = sens),
+             shape = 15,
+             size = 2
+  ) +
+  geom_label(aes(label = paste0(gsub("[.]", "·", format(round(sens*100, 1), nsmall = 1)), "%"),
+                 x = type,
+                 y = upper + 0.1),
+             size = 3,
+             family =  "Guardian Sans") +
+  ylim(0,1) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 60,
+                                   hjust = 1),
+        text = element_text(family="Guardian Sans"),
+        legend.position = "top") +
+  xlab("") +
+  ylab("") +
+  facet_wrap(~group) +
+  scale_colour_manual(values = c("black", col_lan[2]),
+                      name = "")
+
+high_risk_1y_wt|high_risk_1y_brca
+```
+
+## cfDNA, CA125, or combination: diagnostic set (Supplementary Table 2)
+
+```{r cfdna.ca125.diag}
+load("2-markdown/data.Rdata")
+data <- data %>%
+  filter(set == "Diagnostic set" & !is.na(ca125))
+
+data <- data %>%
+  mutate(type2 = case_when(type == "Healthy volunteer" ~ "Healthy volunteer",
+                           type == "Benign control (ovarian)" ~ "Benign pelvic pathology",
+                           type == "Ovarian cancer" ~ "Ovarian cancer")) %>%
+  mutate(type2 = factor(type2, levels = c("Healthy volunteer",
+                                          "Benign pelvic pathology",
+                                          "Ovarian cancer"))) %>%
+  mutate(type3 = case_when(type %in% c("Healthy volunteer",
+                                       "Benign control (ovarian)") ~ "Control",
+                           type == "Ovarian cancer" ~ "Cancer")) %>%
+  mutate(type3 = factor(type3, levels = c("Control", "Cancer"))) %>%
+  mutate(ca125grp = case_when(ca125 >= 35 ~ "pos",
+                              ca125 < 35 ~ "neg")) %>%
+  droplevels() %>%
+  cutoff() %>%
+  mutate(score1 = ifelse(ca125grp == "pos" & cf_ovarian_score == "pos", "pos", "neg"),
+         score2 = ifelse(ca125grp == "pos" | cf_ovarian_score == "pos", "pos", "neg"))
+
+scorelist <- list("cfDNAme score" = data$cf_ovarian_score,
+                  "CA125" = data$ca125grp,
+                  "combined" = data$score2)
+allocs <- plot_sens_spec(data$type3, 
+                         scorelist,
+                         "All ovarian cancers")
+
+
+
+# Table
+tmp <- data %>%
+  mutate(disease = case_when(type3 == "Cancer" ~ 1,
+                             type3 == "Control" ~ 0),
+         score1 = case_when(cf_ovarian_score == "pos" ~ 1,
+                            cf_ovarian_score == "neg" ~ 0),
+         score2 = case_when(ca125grp == "pos" ~ 1,
+                            ca125grp == "neg" ~ 0),
+         score3 = case_when(score1 == 1 | score2 == 1 ~ 1,
+                            score1 == 0 & score2 == 0 ~ 0))
+
+# Print cfDNAme, CA125, and combined. Difference: CA125 and combined.
+disease <- tmp$disease
+score1 <- tmp$score1
+score2 <- tmp$score2
+score3 <- tmp$score3
+t <- 2
+
+require(DTComPair)
+require(bdpv)
+
+# subfunctions
+var <- function(se, n){
+  var <- (se*sqrt(n))^2
+  return(var)
+}
+
+ci_diff <- function(x1, x2, var1, var2, t, n1, n2){
+  pooled_var <- ((n1-1)*var1 + (n2-1)*var2)/(n1+n2-2)
+  cil <- (x2-x1) - t*sqrt((pooled_var)/n1 + (pooled_var)/n2)
+  ciu <- (x2-x1) + t*sqrt((pooled_var)/n1 + (pooled_var)/n2)
+  
+  return(list(pooled_var = pooled_var,
+              diff = x2-x1,
+              cil = cil,
+              ciu = ciu))
+}
+
+
+# Test 1 Tabulation CA125
+tab <- table(score1, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group1 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+# GROUP 2 Tabulation cfDNAme
+tab <- table(score2, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group2 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+# GROUP 2 Combined
+tab <- table(score3, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group3 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+
+# Compare groups - group 2 and group 3
+# Sensitivity
+sens2 <- group2$SESPDAT$Estimate[1]
+sp2 <- group2$SESPDAT$Estimate[2]
+sens.se2 <- (group2$SESPDAT$`Upper 97.5% limit`[1]-group2$SESPDAT$`Lower 97.5% limit`[1])/(t*2)
+sp.se2 <- (group2$SESPDAT$`Upper 97.5% limit`[2]-group2$SESPDAT$`Lower 97.5% limit`[2])/(t*2)
+n2 <- length(score2)
+
+sens3 <- group3$SESPDAT$Estimate[1]
+sp3 <- group3$SESPDAT$Estimate[2]
+sens.se3 <- (group3$SESPDAT$`Upper 97.5% limit`[1]-group3$SESPDAT$`Lower 97.5% limit`[1])/(t*2)
+sp.se3 <- (group3$SESPDAT$`Upper 97.5% limit`[2]-group3$SESPDAT$`Lower 97.5% limit`[2])/(t*2)
+n3 <- length(score3)
+
+sens.v2 <- var(sens.se2, n2)
+sens.v3 <- var(sens.se3, n3)
+sp.v2 <- var(sp.se2, n2)
+sp.v3 <- var(sp.se3, n3)
+
+# Compute Differences
+sens.diff <- ci_diff(sens2, sens3, sens.v2, sens.v3, t, n2, n3)
+sens.diff <- as.data.frame(sens.diff)
+rownames(sens.diff) <- "sensitivity"
+
+sp.diff <- ci_diff(sp2, sp3, sp.v2, sp.v3, t, n2, n3)
+sp.diff <- as.data.frame(sp.diff)
+rownames(sp.diff) <- "specificity"
+
+#----------
+diff <- rbind(sens.diff, sp.diff)
+
+dat <- data.frame(matrix(nrow = 8,
+                         ncol = 3))
+
+colnames(dat) <- c("Test",
+                   "Value",
+                   "Type")
+
+dat$Test <- c(rep("cfDNAme score", 2),
+              rep("CA125", 2),
+              rep("Combined", 4))
+
+dat$Type <- c("Sensitivity", "Specificity",
+              "Sensitivity", "Specificity",
+              "Sensitivity", "Specificity", "Difference sensitivity to CA125 alone", "Difference specificity to CA125 alone")
+
+dat[1,2] <- paste0(format(round(group1$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                   format(round(group1$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                   format(round(group1$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dat[2,2] <- paste0(format(round(group1$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                   format(round(group1$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                   format(round(group1$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+dat[3,2] <- paste0(format(round(group2$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                   format(round(group2$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                   format(round(group2$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dat[4,2] <- paste0(format(round(group2$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                   format(round(group2$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                   format(round(group2$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+dat[5,2] <- paste0(format(round(group3$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                   format(round(group3$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                   format(round(group3$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dat[6,2] <- paste0(format(round(group3$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                   format(round(group3$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                   format(round(group3$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+
+dat[7,2] <- paste0(format(round(diff[1,2]*100, 1), nsmall = 1), "% (",
+                   format(round(diff[1,3]*100, 1), nsmall = 1), "-",
+                   format(round(diff[1,4]*100, 1), nsmall = 1), "%)")
+dat[8,2] <- paste0(format(round(diff[2,2]*100, 1), nsmall = 1), "% (",
+                   format(round(diff[2,3]*100, 1), nsmall = 1), "-",
+                   format(round(diff[2,4]*100, 1), nsmall = 1), "%)")
+
+
+
+# same for HR cancers -----------------
+tmp <- data %>%
+  filter((type3 == "Control") | (type3=="Cancer" & risk == "High")) %>%
+  mutate(disease = case_when(type3 == "Cancer" ~ 1,
+                             type3 == "Control" ~ 0),
+         score1 = case_when(cf_ovarian_score == "pos" ~ 1,
+                            cf_ovarian_score == "neg" ~ 0),
+         score2 = case_when(ca125grp == "pos" ~ 1,
+                            ca125grp == "neg" ~ 0),
+         score3 = case_when(score1 == 1 | score2 == 1 ~ 1,
+                            score1 == 0 & score2 == 0 ~ 0))
+
+disease <- tmp$disease
+score1 <- tmp$score1
+score2 <- tmp$score2
+score3 <- tmp$score3
+t <- 2
+
+
+# Test 1 Tabulation CA125
+tab <- table(score1, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group1 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+# GROUP 2 Tabulation cfDNAme
+tab <- table(score2, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group2 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+# GROUP 2 Combined
+tab <- table(score3, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group3 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+
+# Compare groups - group 2 and group 3
+# Sensitivity
+sens2 <- group2$SESPDAT$Estimate[1]
+sp2 <- group2$SESPDAT$Estimate[2]
+sens.se2 <- (group2$SESPDAT$`Upper 97.5% limit`[1]-group2$SESPDAT$`Lower 97.5% limit`[1])/(t*2)
+sp.se2 <- (group2$SESPDAT$`Upper 97.5% limit`[2]-group2$SESPDAT$`Lower 97.5% limit`[2])/(t*2)
+n2 <- length(score2)
+
+sens3 <- group3$SESPDAT$Estimate[1]
+sp3 <- group3$SESPDAT$Estimate[2]
+sens.se3 <- (group3$SESPDAT$`Upper 97.5% limit`[1]-group3$SESPDAT$`Lower 97.5% limit`[1])/(t*2)
+sp.se3 <- (group3$SESPDAT$`Upper 97.5% limit`[2]-group3$SESPDAT$`Lower 97.5% limit`[2])/(t*2)
+n3 <- length(score3)
+
+sens.v2 <- var(sens.se2, n2)
+sens.v3 <- var(sens.se3, n3)
+sp.v2 <- var(sp.se2, n2)
+sp.v3 <- var(sp.se3, n3)
+
+# Compute Differences
+sens.diff <- ci_diff(sens2, sens3, sens.v2, sens.v3, t, n2, n3)
+sens.diff <- as.data.frame(sens.diff)
+rownames(sens.diff) <- "sensitivity"
+
+sp.diff <- ci_diff(sp2, sp3, sp.v2, sp.v3, t, n2, n3)
+sp.diff <- as.data.frame(sp.diff)
+rownames(sp.diff) <- "specificity"
+
+#----------
+diff <- rbind(sens.diff, sp.diff)
+
+dathr <- data.frame(matrix(nrow = 8,
+                           ncol = 3))
+
+colnames(dathr) <- c("Test",
+                     "Value_hr",
+                     "Type")
+
+dathr$Test <- c(rep("cfDNAme score", 2),
+                rep("CA125", 2),
+                rep("Combined", 4))
+
+dathr$Type <- c("Sensitivity", "Specificity",
+                "Sensitivity", "Specificity",
+                "Sensitivity", "Specificity", "Difference sensitivity to CA125 alone", "Difference specificity to CA125 alone")
+
+dathr[1,2] <- paste0(format(round(group1$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                     format(round(group1$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                     format(round(group1$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dathr[2,2] <- paste0(format(round(group1$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                     format(round(group1$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                     format(round(group1$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+dathr[3,2] <- paste0(format(round(group2$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                     format(round(group2$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                     format(round(group2$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dathr[4,2] <- paste0(format(round(group2$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                     format(round(group2$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                     format(round(group2$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+dathr[5,2] <- paste0(format(round(group3$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                     format(round(group3$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                     format(round(group3$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dathr[6,2] <- paste0(format(round(group3$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                     format(round(group3$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                     format(round(group3$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+
+dathr[7,2] <- paste0(format(round(diff[1,2]*100,1), nsmall = 1), "% (",
+                     format(round(diff[1,3]*100, 1), nsmall = 1), "-",
+                     format(round(diff[1,4]*100, 1), nsmall = 1), "%)")
+dathr[8,2] <- paste0(format(round(diff[2,2]*100, 1), nsmall = 1), "% (",
+                     format(round(diff[2,3]*100, 1), nsmall = 1), "-",
+                     format(round(diff[2,4]*100, 1), nsmall = 1), "%)")
+
+
+dat <- cbind(dat, value_hr = dathr$Value)
+
+tbl <- dat %>%
+  gt(groupname_col = "Test",
+     rowname_col = "Type") %>%
+  cols_label(Value = html("<b>All cancers (95% CI)</b><br>
+                         25 cancers<br>39 controls"),
+             value_hr = html("<b>High-risk cancers (95% CI)</b><br>
+             19 cancers<br>39 controls")) %>%
+  text_transform(locations = cells_body(),
+                 fn = function(x){
+                   gsub("[.]", "·", x)
+                 }) %>%
+  tab_options(table.font.names = "Guardian Sans",
+              row_group.font.weight = "bold",
+              data_row.padding = 2,
+              column_labels.font.size = 12,
+              table.font.size = 12,
+              row_group.padding = 2,
+              row_group.border.right.width = px(10),
+              summary_row.padding = 2,
+              table.width = px(550),
+              table.border.top.color = "white",
+              row_group.border.top.width = px(1),
+              row_group.border.bottom.width = px(1),
+              stub.border.width = px(0),
+              heading.title.font.size = 14) %>% 
+  opt_row_striping()
+
+
+tbl
+```
+
+## cfDNA, CA125, or combination: early detection set (Supplementary Table 3)
+
+```{r cfdna.ca125.earlydet}
+load("2-markdown/data.Rdata")
+data <- data %>%
+  filter(set == "Early detection set")
+gdna <- median(data$gDNA_cont_ratio)
+data <- data %>%
+  filter(gDNA_cont_ratio>=gdna) %>%
+  mutate(type3 = case_when(type == "Control" ~ "Control",
+                           type == "Ovarian" ~ "Cancer")) %>%
+  mutate(type3 = factor(type3, levels = c("Control", "Cancer"))) %>%
+  mutate(ca125grp = case_when(ca125 >= 35 ~ "pos",
+                              ca125 < 35 ~ "neg",
+                              is.na(ca125) & ca125_local_datediff < 0 & ca125_local >= 35 ~ "pos",
+                              is.na(ca125) & ca125_local_datediff>0 & ca125_local < 35 ~ "neg")) %>%
+  filter(!is.na(ca125grp)) %>%
+  droplevels() %>%
+  cutoff() %>%
+  mutate(score1 = ifelse(ca125grp == "pos" & cf_ovarian_score == "pos", "pos", "neg"),
+         score2 = ifelse(ca125grp == "pos" | cf_ovarian_score == "pos", "pos", "neg"))
+  
+# Table
+tmp <- data %>%
+  mutate(disease = case_when(type3 == "Cancer" ~ 1,
+                             type3 == "Control" ~ 0),
+         score1 = case_when(cf_ovarian_score == "pos" ~ 1,
+                            cf_ovarian_score == "neg" ~ 0),
+         score2 = case_when(ca125grp == "pos" ~ 1,
+                            ca125grp == "neg" ~ 0),
+         score3 = case_when(score1 == 1 | score2 == 1 ~ 1,
+                            score1 == 0 & score2 == 0 ~ 0))
+
+# Print cfDNAme, CA125, and combined. Difference: CA125 and combined.
+disease <- tmp$disease
+score1 <- tmp$score1
+score2 <- tmp$score2
+score3 <- tmp$score3
+t <- 2
+
+require(DTComPair)
+require(bdpv)
+
+# subfunctions
+var <- function(se, n){
+  var <- (se*sqrt(n))^2
+  return(var)
+}
+
+ci_diff <- function(x1, x2, var1, var2, t, n1, n2){
+  pooled_var <- ((n1-1)*var1 + (n2-1)*var2)/(n1+n2-2)
+  cil <- (x2-x1) - t*sqrt((pooled_var)/n1 + (pooled_var)/n2)
+  ciu <- (x2-x1) + t*sqrt((pooled_var)/n1 + (pooled_var)/n2)
+  
+  return(list(pooled_var = pooled_var,
+              diff = x2-x1,
+              cil = cil,
+              ciu = ciu))
+}
+
+
+# Test 1 Tabulation CA125
+tab <- table(score1, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group1 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+# GROUP 2 Tabulation cfDNAme
+tab <- table(score2, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group2 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+# GROUP 2 Combined
+tab <- table(score3, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group3 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+
+# Compare groups - group 2 and group 3
+# Sensitivity
+sens2 <- group2$SESPDAT$Estimate[1]
+sp2 <- group2$SESPDAT$Estimate[2]
+sens.se2 <- (group2$SESPDAT$`Upper 97.5% limit`[1]-group2$SESPDAT$`Lower 97.5% limit`[1])/(t*2)
+sp.se2 <- (group2$SESPDAT$`Upper 97.5% limit`[2]-group2$SESPDAT$`Lower 97.5% limit`[2])/(t*2)
+n2 <- length(score2)
+
+sens3 <- group3$SESPDAT$Estimate[1]
+sp3 <- group3$SESPDAT$Estimate[2]
+sens.se3 <- (group3$SESPDAT$`Upper 97.5% limit`[1]-group3$SESPDAT$`Lower 97.5% limit`[1])/(t*2)
+sp.se3 <- (group3$SESPDAT$`Upper 97.5% limit`[2]-group3$SESPDAT$`Lower 97.5% limit`[2])/(t*2)
+n3 <- length(score3)
+
+sens.v2 <- var(sens.se2, n2)
+sens.v3 <- var(sens.se3, n3)
+sp.v2 <- var(sp.se2, n2)
+sp.v3 <- var(sp.se3, n3)
+
+# Compute Differences
+sens.diff <- ci_diff(sens2, sens3, sens.v2, sens.v3, t, n2, n3)
+sens.diff <- as.data.frame(sens.diff)
+rownames(sens.diff) <- "sensitivity"
+
+sp.diff <- ci_diff(sp2, sp3, sp.v2, sp.v3, t, n2, n3)
+sp.diff <- as.data.frame(sp.diff)
+rownames(sp.diff) <- "specificity"
+
+#----------
+diff <- rbind(sens.diff, sp.diff)
+
+dat <- data.frame(matrix(nrow = 8,
+                         ncol = 3))
+
+colnames(dat) <- c("Test",
+                   "Value",
+                   "Type")
+
+dat$Test <- c(rep("cfDNAme score", 2),
+              rep("CA125", 2),
+              rep("Combined", 4))
+
+dat$Type <- c("Sensitivity", "Specificity",
+              "Sensitivity", "Specificity",
+              "Sensitivity", "Specificity", "Difference sensitivity to CA125 alone", "Difference specificity to CA125 alone")
+
+dat[1,2] <- paste0(format(round(group1$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                   format(round(group1$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                   format(round(group1$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dat[2,2] <- paste0(format(round(group1$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                   format(round(group1$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                   format(round(group1$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+dat[3,2] <- paste0(format(round(group2$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                   format(round(group2$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                   format(round(group2$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dat[4,2] <- paste0(format(round(group2$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                   format(round(group2$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                   format(round(group2$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+dat[5,2] <- paste0(format(round(group3$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                   format(round(group3$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                   format(round(group3$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dat[6,2] <- paste0(format(round(group3$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                   format(round(group3$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                   format(round(group3$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+
+dat[7,2] <- paste0(format(round(diff[1,2]*100, 1), nsmall = 1), "% (",
+                   format(round(diff[1,3]*100, 1), nsmall = 1), "-",
+                   format(round(diff[1,4]*100, 1), nsmall = 1), "%)")
+dat[8,2] <- paste0(format(round(diff[2,2]*100, 1), nsmall = 1), "% (",
+                   format(round(diff[2,3]*100, 1), nsmall = 1), "-",
+                   format(round(diff[2,4]*100, 1), nsmall = 1), "%)")
+
+
+
+# same for HR cancers -----------------
+tmp <- data %>%
+  filter((type3 == "Control") | (type3=="Cancer" & risk == "High")) %>%
+  mutate(disease = case_when(type3 == "Cancer" ~ 1,
+                             type3 == "Control" ~ 0),
+         score1 = case_when(cf_ovarian_score == "pos" ~ 1,
+                            cf_ovarian_score == "neg" ~ 0),
+         score2 = case_when(ca125grp == "pos" ~ 1,
+                            ca125grp == "neg" ~ 0),
+         score3 = case_when(score1 == 1 | score2 == 1 ~ 1,
+                            score1 == 0 & score2 == 0 ~ 0))
+
+disease <- tmp$disease
+score1 <- tmp$score1
+score2 <- tmp$score2
+score3 <- tmp$score3
+t <- 2
+
+
+# Test 1 Tabulation CA125
+tab <- table(score1, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group1 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+# GROUP 2 Tabulation cfDNAme
+tab <- table(score2, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group2 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+# GROUP 2 Combined
+tab <- table(score3, disease)
+tab <- matrix(c(tab[2,2], tab[1,2], tab[2,1], tab[1,1]), ncol = 2)
+colnames(tab) <- c("Case", "Control")
+rownames(tab) <- c("Case", "Control")
+group3 <- BDtest(xmat=as.matrix(tab), pr=0.5, conf.level = 0.95)
+
+
+# Compare groups - group 2 and group 3
+# Sensitivity
+sens2 <- group2$SESPDAT$Estimate[1]
+sp2 <- group2$SESPDAT$Estimate[2]
+sens.se2 <- (group2$SESPDAT$`Upper 97.5% limit`[1]-group2$SESPDAT$`Lower 97.5% limit`[1])/(t*2)
+sp.se2 <- (group2$SESPDAT$`Upper 97.5% limit`[2]-group2$SESPDAT$`Lower 97.5% limit`[2])/(t*2)
+n2 <- length(score2)
+
+sens3 <- group3$SESPDAT$Estimate[1]
+sp3 <- group3$SESPDAT$Estimate[2]
+sens.se3 <- (group3$SESPDAT$`Upper 97.5% limit`[1]-group3$SESPDAT$`Lower 97.5% limit`[1])/(t*2)
+sp.se3 <- (group3$SESPDAT$`Upper 97.5% limit`[2]-group3$SESPDAT$`Lower 97.5% limit`[2])/(t*2)
+n3 <- length(score3)
+
+sens.v2 <- var(sens.se2, n2)
+sens.v3 <- var(sens.se3, n3)
+sp.v2 <- var(sp.se2, n2)
+sp.v3 <- var(sp.se3, n3)
+
+# Compute Differences
+sens.diff <- ci_diff(sens2, sens3, sens.v2, sens.v3, t, n2, n3)
+sens.diff <- as.data.frame(sens.diff)
+rownames(sens.diff) <- "sensitivity"
+
+sp.diff <- ci_diff(sp2, sp3, sp.v2, sp.v3, t, n2, n3)
+sp.diff <- as.data.frame(sp.diff)
+rownames(sp.diff) <- "specificity"
+
+#----------
+diff <- rbind(sens.diff, sp.diff)
+
+dathr <- data.frame(matrix(nrow = 8,
+                           ncol = 3))
+
+colnames(dathr) <- c("Test",
+                     "Value_hr",
+                     "Type")
+
+dathr$Test <- c(rep("cfDNAme score", 2),
+                rep("CA125", 2),
+                rep("Combined", 4))
+
+dathr$Type <- c("Sensitivity", "Specificity",
+                "Sensitivity", "Specificity",
+                "Sensitivity", "Specificity", "Difference sensitivity to CA125 alone", "Difference specificity to CA125 alone")
+
+dathr[1,2] <- paste0(format(round(group1$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                     format(round(group1$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                     format(round(group1$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dathr[2,2] <- paste0(format(round(group1$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                     format(round(group1$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                     format(round(group1$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+dathr[3,2] <- paste0(format(round(group2$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                     format(round(group2$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                     format(round(group2$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dathr[4,2] <- paste0(format(round(group2$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                     format(round(group2$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                     format(round(group2$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+dathr[5,2] <- paste0(format(round(group3$SESPDAT$Estimate[1]*100,1), nsmall = 1), "% (",
+                     format(round(group3$SESPDAT$`Lower 97.5% limit`[1]*100,1), nsmall = 1), "-",
+                     format(round(group3$SESPDAT$`Upper 97.5% limit`[1]*100,1), nsmall = 1), "%)")
+dathr[6,2] <- paste0(format(round(group3$SESPDAT$Estimate[2]*100,1), nsmall = 1), "% (",
+                     format(round(group3$SESPDAT$`Lower 97.5% limit`[2]*100,1), nsmall = 1), "-",
+                     format(round(group3$SESPDAT$`Upper 97.5% limit`[2]*100,1), nsmall = 1), "%)")
+
+dathr[7,2] <- paste0(format(round(diff[1,2]*100,1), nsmall = 1), "% (",
+                     format(round(diff[1,3]*100, 1), nsmall = 1), "-",
+                     format(round(diff[1,4]*100, 1), nsmall = 1), "%)")
+dathr[8,2] <- paste0(format(round(diff[2,2]*100, 1), nsmall = 1), "% (",
+                     format(round(diff[2,3]*100, 1), nsmall = 1), "-",
+                     format(round(diff[2,4]*100, 1), nsmall = 1), "%)")
+
+
+
+
+dat <- cbind(dat, value_hr = dathr$Value)
+
+tbl <- dat %>%
+  gt(groupname_col = "Test",
+     rowname_col = "Type") %>%
+  cols_label(Value = html("<b>All cancers (95% CI)</b><br>
+                         9 cancers<br>19 controls"),
+             value_hr = html("<b>High-risk cancers (95% CI)</b><br>
+             7 cancers<br>19 controls")) %>%
+  text_transform(locations = cells_body(),
+                 fn = function(x){
+                   gsub("[.]", "·", x)
+                 }) %>%
+  tab_options(table.font.names = "Guardian Sans",
+              row_group.font.weight = "bold",
+              data_row.padding = 2,
+              column_labels.font.size = 12,
+              table.font.size = 12,
+              row_group.padding = 2,
+              row_group.border.right.width = px(10),
+              summary_row.padding = 2,
+              table.width = px(550),
+              table.border.top.color = "white",
+              row_group.border.top.width = px(1),
+              row_group.border.bottom.width = px(1),
+              stub.border.width = px(0),
+              heading.title.font.size = 14) %>% 
+  opt_row_striping()
+
+
+tbl
+```
+
+## cfDNA or CA125 by stage (Supplementary Table 4)
+
+```{r}
+load("2-markdown/data.Rdata")
+
+data <- data %>%
+  filter(set != "Precision set") |> 
+  droplevels() %>%
+  mutate(type2 = case_when(type == "Healthy volunteer" ~ "Healthy volunteer",
+                           type == "Benign control (ovarian)" ~ "Benign pelvic pathology",
+                           type == "Ovarian cancer" ~ "Ovarian cancer")) %>%
+  mutate(type2 = factor(type2, levels = c("Healthy volunteer",
+                                          "Benign pelvic pathology",
+                                          "Ovarian cancer"))) %>%
+  mutate(type3 = case_when(type %in% c("Healthy volunteer",
+                                       "Benign control (ovarian)") ~ "Control",
+                           type == "Ovarian cancer" ~ "Cancer")) %>%
+  mutate(type3 = factor(type3, levels = c("Control", "Cancer"))) %>%
+  mutate(stage = ifelse(type3 == "Ovarian cancer" & is.na(stage), "Unknown",
+                           stage)) %>%
+  mutate(stage = case_when(stage == "1" ~ "I",
+                              stage == "2" ~ "II",
+                              stage == "3" ~ "III",
+                              stage == "4" ~ "IV",
+                              stage == "Unknown" ~ "Unknown")) %>%
+  mutate(stage = factor(stage, levels = c("I",
+                                                "II",
+                                                "III",
+                                                "IV",
+                                                "Unknown"))) %>%
+  cutoff()
+gdna <- median(data[data$set=="Early detection set",]$gDNA_cont_ratio)
+
+data <- data %>%
+  mutate(ca125grp = case_when(ca125 >= 35 ~ "pos",
+                              ca125 < 35 ~ "neg",
+                              is.na(ca125) & ca125_local_datediff < 0 & ca125_local >= 35 ~ "pos",
+                              is.na(ca125) & ca125_local_datediff>0 & ca125_local < 35 ~ "neg")) %>%
+  filter(!is.na(ca125grp)) %>%
+  droplevels() %>%
+  cutoff() %>%
+  mutate(score1 = ifelse(ca125grp == "pos" & cf_ovarian_score == "pos", "pos", "neg"),
+         score2 = ifelse(ca125grp == "pos" | cf_ovarian_score == "pos", "pos", "neg"))
+
+library(gtsummary)
+library(gt)
+
+theme_gtsummary_journal(journal = "jama")
+theme_gtsummary_compact()
+
+diag <- data %>%
+  filter(type == "Ovarian cancer" & set == "Diagnostic set") %>%
+  tbl_cross(row = stage, col = score2,
+            label = list(stage ~ "Stage")) %>%
+  bold_labels() %>%
+  modify_spanning_header(all_stat_cols() ~ "cfDNA or CA125") %>%
+  modify_header(label = "cfDNAme or CA125",
+                stat_1 = "negative",
+                stat_2 = "positive") %>%
+  modify_table_body(~.x %>% dplyr::relocate(stat_0, .before = stat_1))
+
+pred <- data %>%
+  filter(type == "Ovarian" & set == "Early detection set" & gDNA_cont_ratio >= gdna) %>%
+  tbl_cross(row = stage, col = score2,
+            label = list(stage ~ "Stage")) %>%
+  bold_labels() %>%
+  modify_spanning_header(all_stat_cols() ~ "cfDNAme score") %>%
+  modify_header(label = "cfDNAme or CA125",
+                stat_1 = "negative",
+                stat_2 = "positive") %>%
+  modify_table_body(~.x %>% dplyr::relocate(stat_0, .before = stat_1))
+
+tbl <- tbl_merge(tbls = list(diag, pred),
+          tab_spanner = c(html("<b>Diagnostic set</b>"), 
+                          html("<b>Early detection set*</b>"))) %>%
+  as_gt()  %>%
+  tab_options(
+    table.width = px(500),
+    table.font.size = 12,
+    data_row.padding = px(0),
+    footnotes.font.size = 11,
+    table.font.names = "Guardian Sans",
+  ) %>%
+  opt_row_striping()  %>%
+  gt::tab_footnote(html("* including only samples with lower than median gDNA contamination."))
+
+tbl
+```
+
+## Precision (circadian) (Supplementary Figure 5)
+
+```{r prec}
+load("2-markdown/data.Rdata")
+data <- data %>%
+  filter(set == "Precision set") |> 
+  cutoff()
+
+tmp <- data |> 
+  pivot_longer(names_to = "region",
+               values_to = "value",
+               cols = grep("fully_methylated", colnames(data))) |> 
+  pivot_wider(id_cols = c(sampleid,region),
+              names_from = "sampling_time",
+              values_from = "value")
+
+labs <- gsub("fully_methylated_|_genome", "", unique(tmp$region))
+names(labs) <- unique(tmp$region)
+labs <- gsub("_", " ", labs)
+
+prec <- tmp |> 
+  ggplot(aes(x = day,
+             y = night,
+             colour = region)) +
+  geom_point(size = 1) +
+  facet_wrap(~region,
+             labeller = labeller(region = labs)) +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dotted",
+              colour = "gray60") +
+  ggpubr::stat_cor() +
+  labs(x = "fully methylated reads (%)\nrep 1 (day)", y = "fully methylated reads (%)\nrep 2 (night)") +
+  theme_bw() +
+  theme(legend.key = element_blank(),
+        legend.position = "none",
+        aspect.ratio = 0.8,
+        panel.spacing = unit(1.5, "lines"),
+        text = element_text(family="Guardian Sans")) +
+  scale_colour_manual(values = cols[c(1, 3, 6)],
+                      name = "") +
+  guides(col = guide_legend(override.aes = list(linetype = c(0, 0, 0),
+                                                size = 2)))
+
+score <- data |> 
+  ggplot(aes(x = sampling_time,
+             y = as.factor(sampleid),
+             fill = cf_ovarian_score))+
+  geom_tile() +
+  theme_bw()+
+  theme(aspect.ratio = 0.75,
+        legend.position = "top") +
+  scale_colour_manual(aesthetics = "fill",
+                      values = cols[c(5, 2)],
+                      name = "") +
+  labs(x = "", y = "sample id")
+
+
+plot <- (prec|score) + plot_layout(widths = c(3, 1)) + plot_annotation(tag_levels = "A")
+
+# ggsave(plot = plot, filename = "../1-figures/precision.pdf",
+#        width = 12, height = 4.5,
+#        device = cairo_pdf)
+```
