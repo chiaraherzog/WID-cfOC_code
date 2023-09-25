@@ -1,0 +1,174 @@
+---
+title: "Plasma cell-free DNA methylation analysis for ovarian cancer detection – analysis of samples from a case-control study and an ovarian cancer screening trial"
+author: "Supplementary Material"
+date: ""
+output:
+  pdf_document:
+    toc: false
+    latex_engine: xelatex
+header-includes:
+  \usepackage{fontspec}
+  \usepackage[utf8]{inputenc}
+  \setmainfont{Arial}
+  \usepackage{pdfpages}
+  \usepackage{graphicx}
+  \usepackage{siunitx}
+---
+
+```{r setup, include=FALSE, message=FALSE, echo=FALSE}
+library(knitr)
+library(dplyr)
+library(tidyverse)
+library(ggtext)
+library(ggplot2)
+library(tidyverse)
+library(patchwork)
+library(ggsci)
+library(pROC)
+library(gtsummary)
+library(magick)
+library(ggpubr)
+library(gt)
+library(epiR)
+library(gridExtra)
+library(grid)
+
+knitr::opts_chunk$set(message = F,
+                      warning = F,
+                      echo = F)
+
+# Colour palette
+cols <- pal_lancet(palette="lanonc", alpha = 0.8)(8) 
+
+# Themes
+theme_gtsummary_journal(journal = "nejm")
+theme_gtsummary_compact()
+```
+
+Chiara Herzog, Allison Jones, Iona Evans, Daniel Reisel, Adeola Olaitan, Konstantinos Doufekas, Nicola MacDonald, Angelique Flöter Rådestad, Kristina Gemzell-Danielsson, Michael Zikan, David Cibula, Lukáš Dostálek, Tobias Paprotka, Andreas Leimbach, Markus Schmitt, Andy Ryan, Aleksandra Gentry-Maharaj, Sophia Apostolidou, Adam Rosenthal, Usha Menon, and Martin Widschwendter
+
+\tableofcontents
+
+\newcommand\invisiblesection[1]{%
+  \refstepcounter{section}%
+  \addcontentsline{toc}{section}{\protect\numberline{\thesection}#1}%
+  \sectionmark{#1}}
+
+\newpage
+
+\section{Supplementary Tables}
+
+\invisiblesection{Supplementary Table 1. Participant characteristics in the circadian analytical assessment ('precision') set.}
+
+\textbf{Supplementary Table 1. Participant characteristics in the circadian analytical assessment ('precision') set.}
+
+\includegraphics[width=0.9\textwidth, trim= 2cm 8cm 2cm 0cm]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/stable1.pdf}
+
+\newpage
+
+\invisiblesection{Supplementary Table 2. Details of targeted regions (available as separate file).}
+
+\textbf{Supplementary Table 2. Details of targeted regions (available as separate file).}
+
+(See .xlsx file)
+
+\newpage
+
+\invisiblesection{Supplementary Table 3. Summary sequencing statistics for each set.}
+
+\textbf{Supplementary Table 3. Summary sequencing statistics for each set.}
+
+\includegraphics[width=0.9\textwidth, trim= 2cm 8cm 0cm 0cm]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/stable3.pdf}
+
+\newpage
+
+\invisiblesection{Supplementary Table 4. Sample-level sequencing statistics of targeted regions (available as separate file).}
+
+\textbf{Supplementary Table 4. Sample-level sequencing statistics of targeted regions (available as separate file).}
+
+(See .csv file)
+
+\newpage
+
+\invisiblesection{Supplementary Table 5. Sensitivity and specificity of the WID™-cfOC score, CA125, or combination of both in samples in the diagnostic set for which CA125 were available.}
+
+\textbf{Supplementary Table 5. Sensitivity and specificity of the WID™-cfOC score, CA125, or combination of both in samples in the diagnostic set for which CA125 were available.}
+
+\includegraphics[width=0.9\textwidth, trim= 2cm 8cm 2cm 0cm]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/stable5.pdf}
+
+\newpage
+
+\invisiblesection{Supplementary Table 6. Sensitivity and specificity of the WID™-cfOC score, CA125, or combination of both in samples in the early detection set samples with lower than median gDNA contamination for which CA125 were available.}
+
+\textbf{Supplementary Table 6. Sensitivity and specificity of the WID™-cfOC score, CA125, or combination of both in samples in the early detection set samples with lower than median gDNA contamination for which CA125 were available.}
+
+\includegraphics[width=0.9\textwidth, trim= 2cm 8cm 2cm 0cm]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/stable6.pdf}
+
+\newpage
+
+\invisiblesection{Supplementary Table 7. Evaluation of combined WID™-cfOC and CA125 scoring by stage.}
+
+\textbf{Supplementary Table 7. Evaluation of combined  WID™-cfOC and CA125 scoring by stage.} Samples positive for either WID™-cfOC or CA125 (or both), were considered positive.
+
+\includegraphics[width=0.9\textwidth, trim= 2cm 8cm 2cm 0cm]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/stable7.pdf}
+
+
+\section{Supplementary Figures}
+
+
+\invisiblesection{Supplementary Figure 1. STARD Diagram of the diagnostic set (cfDNA tube study).}
+
+\includegraphics[width=0.95\textwidth, trim=0 8cm 0 0]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/s-figure1_STARD_UCL.pdf}
+
+\textbf{Supplementary Figure 1. STARD Diagram of the diagnostic set (cfDNA tube study).}
+
+\newpage
+
+\invisiblesection{Supplementary Figure 2. STARD Diagram of the early detection set (UKFOCSS).}
+
+\includegraphics[width=0.95\textwidth, trim=0 8.5cm 0 0]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/s-figure2_STARD_UKFOCSS.pdf}
+
+\textbf{Supplementary Figure 2. STARD Diagram of the early detection set (UKFOCSS).}
+
+\newpage
+
+\invisiblesection{Supplementary Figure 3. Quantification of genomic DNA (gDNA) contamination.}
+
+\includegraphics[width=0.95\textwidth, trim=0 3cm 0 0]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/s-figure3.pdf}
+
+\textbf{Supplementary Figure 3. Quantification of genomic DNA (gDNA) contamination. A} and \textbf{B} show DNA size distributions of two exemplary UKFOCSS samples with high and lower gDNA contamination, respectively. Black arrow shows gDNA contamination peak. \textbf{C} For quantification of gDNA contamination, the ratio of cfDNA concentration (ng/uL) to gDNA (ng/uL) was computed. \textbf{D} The median cfDNA/gDNA ratio (dashed grey line) was defined as the cutoff for stratification, with a cfDNA/gDNA ratio higher than the median indicating a lower relative gDNA contamination and vice versa.
+
+\newpage
+
+\invisiblesection{Supplementary Figure 4. Comparison of CA125 and cfDNAme score in the Diagnostic set.}
+
+\includegraphics{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/s-figure4.pdf}
+
+\textbf{Figure 4. Comparison of CA125 and WID™-cfOC in the Diagnostic set.} Sensitivity and specificity of two scores separately, or a combined score that was positive if either one of the two tests was positive, are shown for \textbf{A} all cancers (n=24), or \textbf{B} high-risk cancers (n=18) versus controls (healthy controls, n=4, benign controls, n=35). Error bars indicate 95\% confidence intervals. \textbf{C, D} indicate how the sensitivity and specificity of the WID™-cfOC in CA125-negative samples (including all or only high-risk cancers as cases). CA125 levels $\geq$ 35 units/mL were deemed positive. \textbf{E, F} indicate the sensitivity and specificity of the WID™-cfOC in CA125-positive samples (including all or only high-risk cancers as cases).
+
+\newpage
+
+\newpage
+
+\invisiblesection{Supplementary Figure 5. Sensitivity and specificity by \textit{BRCA1/2} mutation status in the early detection set.}
+
+\begin{centering}
+
+\includegraphics[width=0.65\textwidth]{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/s-figure5.pdf}
+
+\end{centering}
+
+\textbf{Supplementary Figure 5. Sensitivity and specificity by \textit{BRCA1/2} mutation status in the early detection set.}
+\newpage
+
+\invisiblesection{Supplementary Figure 6. Precision of the assay as evaluated xin a circadian analytical assessment set.}
+
+\begin{centering}
+
+\includegraphics{~/Dropbox/eca/cfdname/ukfocss/3-manuscript/3-manuscript/cfOC_code/2-markdown/s6-precision.pdf}
+
+\end{centering}
+
+\textbf{Supplementary Figure 6. Precision of the assay as evaluated in a circadian analytical assessment set. A} Paired values of cfDNA quality (cfDNA/gDNA ratio) for samples from day and night. \textbf{B} Score calls for the WID™-cfOC in matched samples. \textbf{C} Correlation of values across day and night (logarithmic scale to account for low and high values). \textbf{D} Correlation of values across day and night for those samples where the daytime value yielded a fully methylated percentage higher than 1%. \textbf{E} Correlation of values across day and night for those samples where the daytime value exhibited a fully methylated percentage below or equal to 1%. 
+
+\newpage

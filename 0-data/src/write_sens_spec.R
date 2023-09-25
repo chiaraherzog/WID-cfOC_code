@@ -1,5 +1,5 @@
 
-write_sens_spec <- function(type, score, label = "Ovarian cancer", scorename = "cfDNAme score"){
+write_sens_spec <- function(type, score, label = "Ovarian cancer", scorename = "WID™-cfOC"){
   library(epiR)
   require(gt)
   dat <- data.frame(matrix(nrow = 5, ncol = 3))
@@ -23,7 +23,7 @@ write_sens_spec <- function(type, score, label = "Ovarian cancer", scorename = "
   type <- factor(type, levels = c("Cancer", "Control"))
   score <- factor(score, levels = c("pos", "neg"))
   tab <- table(score, type)
-  rval <- summary(epi.tests(tab))
+  rval <- summary(epi.tests(tab, method = 'clopper-pearson'))
   dat[4,1] <- paste0(round(rval$est[3]*100,1), "%")
   dat[5,1] <- paste0(round(rval$lower[3]*100,1), "-", round(rval$upper[3]*100,1), "%")
   dat[4,2] <- paste0(round(rval$est[4]*100,1), "%")
@@ -37,11 +37,6 @@ write_sens_spec <- function(type, score, label = "Ovarian cancer", scorename = "
   
   tab <- dat %>%
     gt::gt(rownames_to_stub=T) %>%
-    text_transform(locations = cells_body(),
-                   fn = function(x){
-                     gsub("[.]", "·", x)
-                   }
-    ) %>%
     fmt_markdown(columns = everything()) %>%
     tab_style(
       cell_text(v_align = "top"),
@@ -51,15 +46,23 @@ write_sens_spec <- function(type, score, label = "Ovarian cancer", scorename = "
       cell_text(align = "left"),
       locations = cells_stub()
     ) %>%
+    tab_style(
+      cell_text(align = "left"),
+      locations = cells_column_labels()
+    ) %>%
+    tab_style(
+      cell_text(align = "left"),
+      locations = cells_body()
+    ) %>%
     gt::tab_options(column_labels.font.weight = "bold",
                     row_group.font.weight = "bold",
                     stub.font.weight = "bold",
                     data_row.padding = 2,
-                    column_labels.font.size = 15,
-                    table.font.size = 15,
+                    column_labels.font.size = 12,
+                    table.font.size = 12,
                     row_group.padding = 2,
-                    table.font.names = "Guardian Sans",
-                    table.width = px(400),
+                    table.font.names = "Arial",
+                    table.width = px(350),
                     row_group.border.right.width = px(10),
                     summary_row.padding = 2,
                     table.border.top.color = "white",

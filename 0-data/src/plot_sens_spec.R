@@ -37,6 +37,9 @@ plot_sens_spec <- function(type, scorelist, title = "Title", print = T){
   
   
   plot <- df %>%
+    dplyr::mutate(Score = factor(Score, levels = c("CA125",
+                                                   "WID™-cfOC",
+                                                   "combined"))) |> 
     ggplot(aes(x = Specificity,
                y = Sensitivity,
                colour = Score)) +
@@ -49,7 +52,7 @@ plot_sens_spec <- function(type, scorelist, title = "Title", print = T){
     ylim(0,1) +
     theme_bw() +
     theme(legend.position = "top",
-          text = element_text(family="Guardian Sans")) +
+          text = element_text(family="Arial")) +
     scale_colour_manual(values = cols[c(3,5,1,7,2,4,6)],
                         name = "") +
     ggtitle(title)

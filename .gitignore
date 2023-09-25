@@ -2,3 +2,13 @@
 *.Rapp.history
 *.Rhistory
 .DS_Store
+.Rproj.user
+0-data/bismark-0.22.3/*
+*.fa
+*.fna
+*.html
+*.pdf
+*.Rdata
+*.csv
+*.xlsx
+*.log
